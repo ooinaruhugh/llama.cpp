@@ -6,6 +6,8 @@
 #include <vector>
 #include <cstdio>
 
+#include "llama-backing-store.h"
+
 // staging buffer size for direct I/O reads, 64MB works well for NVMe drives
 #define LLAMA_DIRECT_IO_BUFFER_SIZE (64 * 1024 * 1024)
 
@@ -20,7 +22,14 @@ using llama_mlocks = std::vector<std::unique_ptr<llama_mlock>>;
 struct llama_file {
     llama_file(const char * fname, const char * mode, bool use_direct_io = false);
     llama_file(FILE * file);
+    // a model held in a backing store: mappable only, tell/seek/read are not supported
+    explicit llama_file(std::unique_ptr<llama_backing_store> store);
+    // a model that is not materialised: knows its size for validation, supports neither io nor mapping
+    explicit llama_file(size_t virtual_size);
     ~llama_file();
+
+    bool readable() const; // tell/seek/read work
+    bool mappable() const; // file_id() can be mapped
 
     size_t tell() const;
     size_t size() const;
@@ -42,6 +51,8 @@ struct llama_file {
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;
+    std::unique_ptr<llama_backing_store> store;
+    size_t virtual_size = 0;
 };
 
 struct llama_mmap {

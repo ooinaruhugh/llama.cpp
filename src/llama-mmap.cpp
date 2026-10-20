@@ -414,15 +414,31 @@ llama_file::llama_file(const char * fname, const char * mode, const bool use_dir
 
 llama_file::llama_file(FILE * file) : pimpl(std::make_unique<impl>(file)) {}
 
+llama_file::llama_file(std::unique_ptr<llama_backing_store> store) : store(std::move(store)) {
+    virtual_size = this->store->size();
+}
+
+llama_file::llama_file(size_t virtual_size) : virtual_size(virtual_size) {}
+
 llama_file::~llama_file() = default;
 
-size_t llama_file::tell() const { return pimpl->tell(); }
-size_t llama_file::size() const { return pimpl->size; }
+bool llama_file::readable() const { return pimpl != nullptr; }
+bool llama_file::mappable() const { return pimpl != nullptr || store != nullptr; }
 
-size_t llama_file::read_alignment() const { return pimpl->read_alignment(); }
-bool llama_file::has_direct_io() const { return pimpl->has_direct_io(); }
+[[noreturn]] static void llama_file_no_io() {
+    throw std::runtime_error("this model source supports only memory mapping, not read or seek");
+}
+
+size_t llama_file::tell() const { if (!pimpl) { llama_file_no_io(); } return pimpl->tell(); }
+size_t llama_file::size() const { return pimpl ? pimpl->size : virtual_size; }
+
+size_t llama_file::read_alignment() const { return pimpl ? pimpl->read_alignment() : 1; }
+bool llama_file::has_direct_io() const { return pimpl && pimpl->has_direct_io(); }
 
 int llama_file::file_id() const {
+    if (!pimpl) {
+        return store ? store->fd() : -1;
+    }
 #ifdef _WIN32
     return _fileno(pimpl->fp);
 #else
@@ -437,18 +453,18 @@ int llama_file::file_id() const {
 #endif
 }
 
-void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
-void llama_file::read_raw(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
+void llama_file::seek(size_t offset, int whence) const { if (!pimpl) { llama_file_no_io(); } pimpl->seek(offset, whence); }
+void llama_file::read_raw(void * ptr, size_t len) { if (!pimpl) { llama_file_no_io(); } pimpl->read_raw(ptr, len); }
 #ifdef _WIN32
-void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
+void llama_file::read_raw_unsafe(void * ptr, size_t len) { if (!pimpl) { llama_file_no_io(); } pimpl->read_raw(ptr, len); }
 #else
-void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw_unsafe(ptr, len); }
+void llama_file::read_raw_unsafe(void * ptr, size_t len) { if (!pimpl) { llama_file_no_io(); } pimpl->read_raw_unsafe(ptr, len); }
 #endif
 
-uint32_t llama_file::read_u32() { return pimpl->read_u32(); }
+uint32_t llama_file::read_u32() { if (!pimpl) { llama_file_no_io(); } return pimpl->read_u32(); }
 
-void llama_file::write_raw(const void * ptr, size_t len) const { pimpl->write_raw(ptr, len); }
-void llama_file::write_u32(uint32_t val) const { pimpl->write_u32(val); }
+void llama_file::write_raw(const void * ptr, size_t len) const { if (!pimpl) { llama_file_no_io(); } pimpl->write_raw(ptr, len); }
+void llama_file::write_u32(uint32_t val) const { if (!pimpl) { llama_file_no_io(); } pimpl->write_u32(val); }
 
 // llama_mmap
 
@@ -485,7 +501,7 @@ struct llama_mmap::impl {
         int flags = MAP_SHARED;
         if (numa) { prefetch = 0; }
 #ifdef __linux__
-        if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
+        if (file->readable() && posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
             LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_SEQUENTIAL) failed: %s\n",
                     strerror(errno));
         }
@@ -676,8 +692,15 @@ struct llama_mmap::impl {
     size_t size;
 };
 
+static struct llama_file * llama_mmap_check(struct llama_file * file) {
+    if (!file->mappable()) {
+        throw std::runtime_error("this model source was opened for metadata only and cannot be memory mapped");
+    }
+    return file;
+}
+
 llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa,
-        const ranges & lazy_ranges) : pimpl(std::make_unique<impl>(file, prefetch, numa, lazy_ranges)) {}
+        const ranges & lazy_ranges) : pimpl(std::make_unique<impl>(llama_mmap_check(file), prefetch, numa, lazy_ranges)) {}
 llama_mmap::~llama_mmap() = default;
 
 size_t llama_mmap::size() const { return pimpl->size; }
