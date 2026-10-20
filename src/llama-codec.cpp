@@ -3,6 +3,7 @@
 #include <cstring>
 
 static const uint8_t llama_magic_xz[] = { 0xFD, '7', 'z', 'X', 'Z', 0x00 };
+static const uint8_t llama_magic_gz[] = { 0x1F, 0x8B, 0x08 }; // gzip, deflate method
 
 // every known format is listed, so a build without its library can say why it refuses the file
 static const llama_codec llama_codecs[] = {
@@ -10,6 +11,11 @@ static const llama_codec llama_codecs[] = {
     { "xz", ".xz", llama_magic_xz, sizeof(llama_magic_xz), true,  "-DLLAMA_LZMA=ON", llama_codec_xz_open },
 #else
     { "xz", ".xz", llama_magic_xz, sizeof(llama_magic_xz), false, "-DLLAMA_LZMA=ON", nullptr },
+#endif
+#ifdef LLAMA_USE_ZLIB
+    { "gzip", ".gz", llama_magic_gz, sizeof(llama_magic_gz), true,  "-DLLAMA_ZLIB=ON", llama_codec_gz_open },
+#else
+    { "gzip", ".gz", llama_magic_gz, sizeof(llama_magic_gz), false, "-DLLAMA_ZLIB=ON", nullptr },
 #endif
 };
 

@@ -37,6 +37,9 @@ constexpr size_t LLAMA_CODEC_MAGIC_MAX = 8;
 #ifdef LLAMA_USE_LZMA
 std::unique_ptr<llama_decoder> llama_codec_xz_open(llama_file & in, bool parallel);
 #endif
+#ifdef LLAMA_USE_ZLIB
+std::unique_ptr<llama_decoder> llama_codec_gz_open(llama_file & in, bool parallel);
+#endif
 
 // nullptr if the leading bytes match no known compressed format
 const llama_codec * llama_codec_find(const uint8_t * head, size_t n);

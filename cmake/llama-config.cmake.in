@@ -3,6 +3,7 @@ set(LLAMA_BUILD_COMMIT @LLAMA_BUILD_COMMIT@)
 set(LLAMA_BUILD_NUMBER @LLAMA_BUILD_NUMBER@)
 set(LLAMA_SHARED_LIB   @BUILD_SHARED_LIBS@)
 set(LLAMA_LZMA_ENABLED @LLAMA_LZMA_ENABLED@)
+set(LLAMA_ZLIB_ENABLED @LLAMA_ZLIB_ENABLED@)
 
 @PACKAGE_INIT@
 
@@ -25,6 +26,10 @@ if(NOT LLAMA_SHARED_LIB)
     if(LLAMA_LZMA_ENABLED)
         find_dependency(LibLZMA)
         list(APPEND _llama_private_libs LibLZMA::LibLZMA)
+    endif()
+    if(LLAMA_ZLIB_ENABLED)
+        find_dependency(ZLIB)
+        list(APPEND _llama_private_libs ZLIB::ZLIB)
     endif()
 endif()
 

@@ -82,7 +82,7 @@ const char * llama_ftype_name(llama_ftype ftype) {
 
 // return a list of splits for a given path
 // for example, given "<name>-00002-of-00004.gguf", returns list of all 4 splits
-// a compression suffix on the file name (".gguf.xz") is not part of the naming scheme: it is set aside for the matching
+// a compression suffix on the file name (".gguf.xz", ".gguf.gz") is not part of the naming scheme: it is set aside for the matching
 //     and put back on the siblings. Whether a file is compressed is decided by its content, not by this
 static std::vector<std::string> llama_get_list_splits(const std::string & path_in, const int idx, const int n_split) {
     std::vector<std::string> paths;

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Loads a compressed GGUF through the command line tools and compares it with the plain file:
 # generation, vocab_only, the memory fit, quantization, split models in every naming style, bad input.
-# Runs for each format whose tool is installed. Without a model (arg or LLAMACPP_TEST_MODELFILE) it is skipped.
+# Runs for each format whose tool is installed (xz, gzip). Without a model (arg or LLAMACPP_TEST_MODELFILE) it is skipped.
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
@@ -128,9 +128,15 @@ if command -v xz >/dev/null; then
 else
     printf "skip xz: the tool is not installed\n"
 fi
+if command -v gzip >/dev/null; then
+    run_format gzip .gz gzip -c -6
+    n_formats=$((n_formats + 1))
+else
+    printf "skip gzip: the tool is not installed\n"
+fi
 
 if [ $n_formats -eq 0 ]; then
-    printf "SKIP: the xz tool is needed\n"
+    printf "SKIP: neither xz nor gzip is installed\n"
     exit 0
 fi
 if [ $fail -ne 0 ]; then

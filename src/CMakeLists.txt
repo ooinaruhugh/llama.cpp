@@ -36,6 +36,7 @@ set(LLAMA_CORE_SOURCES
     llama-backing-store.cpp
     llama-codec.cpp
     llama-codec-xz.cpp
+    llama-codec-gz.cpp
     llama-mmap.cpp
     llama-model-loader.cpp
     llama-model-saver.cpp
@@ -100,7 +101,9 @@ function(llama_optional_codec option package found_var target define label)
 endfunction()
 
 llama_optional_codec(LLAMA_LZMA LibLZMA LIBLZMA_FOUND LibLZMA::LibLZMA LLAMA_USE_LZMA xz)
+llama_optional_codec(LLAMA_ZLIB ZLIB    ZLIB_FOUND    ZLIB::ZLIB       LLAMA_USE_ZLIB gzip)
 set(LLAMA_LZMA_ENABLED ${LLAMA_LZMA_ENABLED} PARENT_SCOPE)
+set(LLAMA_ZLIB_ENABLED ${LLAMA_ZLIB_ENABLED} PARENT_SCOPE)
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)

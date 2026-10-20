@@ -1,11 +1,14 @@
 // Loads a model plain and compressed through the public API only and compares them, for every format built in.
-// The compressed copies are made here with the encoders of the libraries, so the test needs no xz binary.
+// The compressed copies are made here with the encoders of the libraries, so the test needs no xz or gzip binary.
 
 #include "llama.h"
 #include "common.h"
 
 #ifdef TEST_HAVE_LZMA
 #include <lzma.h>
+#endif
+#ifdef TEST_HAVE_ZLIB
+#include <zlib.h>
 #endif
 
 #include <cmath>
@@ -71,11 +74,45 @@ static bool xz_compress(const std::string & src, const std::string & dst, bool l
 }
 #endif
 
+#ifdef TEST_HAVE_ZLIB
+static bool gz_compress(const std::string & src, const std::string & dst, bool) {
+    FILE * in  = fopen(src.c_str(), "rb");
+    FILE * out = fopen(dst.c_str(), "wb");
+    if (!in || !out) {
+        return false;
+    }
+    z_stream strm = {};
+    if (deflateInit2(&strm, 6, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        return false;
+    }
+    std::vector<uint8_t> ibuf(1 << 20), obuf(1 << 20);
+    int ret = Z_OK;
+    bool eof = false;
+    while (ret == Z_OK) {
+        if (strm.avail_in == 0 && !eof) {
+            strm.next_in  = ibuf.data();
+            strm.avail_in = fread(ibuf.data(), 1, ibuf.size(), in);
+            eof = strm.avail_in == 0;
+        }
+        strm.next_out  = obuf.data();
+        strm.avail_out = obuf.size();
+        ret = deflate(&strm, eof ? Z_FINISH : Z_NO_FLUSH);
+        fwrite(obuf.data(), 1, obuf.size() - strm.avail_out, out);
+    }
+    deflateEnd(&strm);
+    fclose(in);
+    fclose(out);
+    return ret == Z_STREAM_END;
+}
+#endif
 
 static std::vector<codec_case> codec_cases() {
     std::vector<codec_case> cases;
 #ifdef TEST_HAVE_LZMA
     cases.push_back({ "xz",   ".xz", xz_compress });
+#endif
+#ifdef TEST_HAVE_ZLIB
+    cases.push_back({ "gzip", ".gz", gz_compress });
 #endif
     return cases;
 }
@@ -180,7 +217,8 @@ static void test_codec(const codec_case & c, const char * model_path, const std:
         CHECK(llama_model_load_from_file(comp_path.c_str(), mp) == nullptr);
     }
 
-    // 5. vocab_only and the memory-fit load (no_alloc, no mmap) work, and do not materialise the model
+    // 5. vocab_only and the memory-fit load (no_alloc, no mmap) work. For a format with an index they do not
+    //    materialise the model. gzip has none, so a large file is decoded once to count its size, without storing it
     const bool big = model_bytes >= (32u << 20);
     {
         const size_t before = footprint();

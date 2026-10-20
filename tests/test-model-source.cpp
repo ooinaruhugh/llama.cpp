@@ -13,6 +13,9 @@
 #ifdef TEST_HAVE_LZMA
 #include <lzma.h>
 #endif
+#ifdef TEST_HAVE_ZLIB
+#include <zlib.h>
+#endif
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -140,13 +143,13 @@ static void test_plain(const std::string & path, const std::vector<uint8_t> & or
     CHECK(!opens("/nonexistent/path/model.gguf", false));
 }
 
-#ifdef TEST_HAVE_LZMA
+#if defined(TEST_HAVE_LZMA) || defined(TEST_HAVE_ZLIB)
 
 // a compressed format under test, with an encoder made from the same library the codec uses
 struct fixture_codec {
     const char * name;
     const char * ext;
-    bool         has_index; // the container is checked without reading the data, not only by a trailer
+    bool         has_index; // the container is checked without reading the data (xz), not only by its trailer (gzip)
     std::vector<uint8_t> (*encode)(const std::vector<uint8_t> &, size_t block);
 };
 
@@ -178,11 +181,29 @@ static std::vector<uint8_t> xz_encode(const std::vector<uint8_t> & in, size_t bl
 }
 #endif
 
+#ifdef TEST_HAVE_ZLIB
+static std::vector<uint8_t> gz_encode(const std::vector<uint8_t> & in, size_t) {
+    z_stream strm = {};
+    CHECK(deflateInit2(&strm, 6, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY) == Z_OK);
+    std::vector<uint8_t> out(deflateBound(&strm, in.size()) + 64);
+    strm.next_in   = const_cast<Bytef *>(in.data());
+    strm.avail_in  = in.size();
+    strm.next_out  = out.data();
+    strm.avail_out = out.size();
+    CHECK(deflate(&strm, Z_FINISH) == Z_STREAM_END);
+    out.resize(out.size() - strm.avail_out);
+    deflateEnd(&strm);
+    return out;
+}
+#endif
 
 static const std::vector<fixture_codec> & fixture_codecs() {
     static const std::vector<fixture_codec> codecs = {
 #ifdef TEST_HAVE_LZMA
         { "xz",   ".xz", true,  xz_encode },
+#endif
+#ifdef TEST_HAVE_ZLIB
+        { "gzip", ".gz", false, gz_encode },
 #endif
     };
     return codecs;
@@ -315,7 +336,7 @@ static void test_malformed(const fixture_codec & c, const std::string & dir, con
     expect_rejected("trailing byte", v, c.has_index);
 
     v = good;
-    v.insert(v.end(), 4, 0); // valid stream padding for xz, still not accepted
+    v.insert(v.end(), 4, 0); // valid stream padding for xz, a zero size field for gzip: not accepted either way
     expect_rejected("trailing zero bytes", v, true);
 
     v = good;
@@ -333,6 +354,19 @@ static void test_malformed(const fixture_codec & c, const std::string & dir, con
     v = good;
     v[v.size() / 2] ^= 0x55;
     expect_rejected("flipped byte in the data", v, false);
+
+    // gzip records the size only in a trailer, so a trailer that disagrees with the data must be an error
+    if (!c.has_index) {
+        for (int delta : { -1000, 1000 }) {
+            v = good;
+            uint32_t size = (uint32_t) v[v.size() - 4] | (uint32_t) v[v.size() - 3] << 8 | (uint32_t) v[v.size() - 2] << 16 | (uint32_t) v[v.size() - 1] << 24;
+            size += delta;
+            for (int k = 0; k < 4; k++) {
+                v[v.size() - 4 + k] = (uint8_t) (size >> (8 * k));
+            }
+            expect_rejected(delta < 0 ? "trailer size too small" : "trailer size too large", v, false);
+        }
+    }
 }
 
 static void test_progress(const fixture_codec & c, const std::string & dir, const std::vector<uint8_t> & orig) {
@@ -398,30 +432,39 @@ static void test_progress(const fixture_codec & c, const std::string & dir, cons
     }
 }
 
-#endif // TEST_HAVE_LZMA
+#endif // TEST_HAVE_LZMA || TEST_HAVE_ZLIB
 
 static void test_unavailable() {
     printf("codec table\n");
 
     const uint8_t xz_magic[] = { 0xFD, '7', 'z', 'X', 'Z', 0x00, 0, 0 };
+    const uint8_t gz_magic[] = { 0x1F, 0x8B, 0x08, 0, 0, 0, 0, 0 };
     const llama_codec * xz = llama_codec_find(xz_magic, sizeof(xz_magic));
+    const llama_codec * gz = llama_codec_find(gz_magic, sizeof(gz_magic));
     CHECK(xz != nullptr && std::string(xz->name) == "xz");
+    CHECK(gz != nullptr && std::string(gz->name) == "gzip");
     CHECK(llama_codec_find((const uint8_t *) "GGUF\x03\0\0\0", 8) == nullptr);
     CHECK(llama_codec_find(xz_magic, 3) == nullptr);
+    CHECK(llama_codec_find(gz_magic, 2) == nullptr);
 
     // a build without a library recognises its format and says why it cannot load the file
-    if (xz && !xz->available) {
-        const std::string path = std::filesystem::temp_directory_path().string() + "/llama-test-unavailable" + xz->suffix;
-        write_file(path, std::vector<uint8_t>(xz_magic, xz_magic + 8));
-        std::string what;
-        CHECK(throws([&] { llama_model_source_params p; p.use_mmap = true; llama_open_model_source(path, p); }, &what));
-        CHECK(what.find(std::string("no ") + xz->name + " support") != std::string::npos);
-        CHECK(what.find(xz->enable) != std::string::npos);
-        std::filesystem::remove(path);
+    for (const llama_codec * codec : { xz, gz }) {
+        if (codec && !codec->available) {
+            const std::string path = std::filesystem::temp_directory_path().string() + "/llama-test-unavailable" + codec->suffix;
+            const uint8_t * m = codec == xz ? xz_magic : gz_magic;
+            write_file(path, std::vector<uint8_t>(m, m + 8));
+            std::string what;
+            CHECK(throws([&] { llama_model_source_params p; p.use_mmap = true; llama_open_model_source(path, p); }, &what));
+            CHECK(what.find(std::string("no ") + codec->name + " support") != std::string::npos);
+            CHECK(what.find(codec->enable) != std::string::npos);
+            std::filesystem::remove(path);
+        }
     }
 
     std::string name = "model-00001-of-00003.gguf.xz";
     CHECK(llama_codec_strip_suffix(name) == ".xz" && name == "model-00001-of-00003.gguf");
+    name = "model-00001-of-00003.gguf.gz";
+    CHECK(llama_codec_strip_suffix(name) == ".gz" && name == "model-00001-of-00003.gguf");
     name = "model.gguf";
     CHECK(llama_codec_strip_suffix(name).empty() && name == "model.gguf");
 }
@@ -444,7 +487,7 @@ int main(int argc, char ** argv) {
     test_backing_store();
     test_plain(plain_path, orig);
     test_unavailable();
-#ifdef TEST_HAVE_LZMA
+#if defined(TEST_HAVE_LZMA) || defined(TEST_HAVE_ZLIB)
     for (const fixture_codec & c : fixture_codecs()) {
         test_compressed(c, dir, orig, plain_path);
         test_malformed(c, dir, orig);
