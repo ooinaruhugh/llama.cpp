@@ -1,5 +1,7 @@
 #include "llama-model-loader.h"
 
+#include "llama-codec.h"
+
 #include "ggml-alloc.h"
 #include "ggml.h"
 #include "gguf.h"
@@ -80,10 +82,15 @@ const char * llama_ftype_name(llama_ftype ftype) {
 
 // return a list of splits for a given path
 // for example, given "<name>-00002-of-00004.gguf", returns list of all 4 splits
-static std::vector<std::string> llama_get_list_splits(const std::string & path, const int idx, const int n_split) {
+// a compression suffix on the file name (".gguf.xz") is not part of the naming scheme: it is set aside for the matching
+//     and put back on the siblings. Whether a file is compressed is decided by its content, not by this
+static std::vector<std::string> llama_get_list_splits(const std::string & path_in, const int idx, const int n_split) {
     std::vector<std::string> paths;
     std::string split_prefix;
     std::vector<char> buf(llama_path_max(), 0);
+
+    std::string path = path_in;
+    const std::string suffix = llama_codec_strip_suffix(path);
 
     {
         int ret = llama_split_prefix(buf.data(), buf.size(), path.c_str(), idx, n_split);
@@ -99,10 +106,22 @@ static std::vector<std::string> llama_get_list_splits(const std::string & path, 
 
     for (int idx = 0; idx < n_split; ++idx) {
         int ret = llama_split_path(buf.data(), buf.size(), split_prefix.c_str(), idx, n_split);
-        paths.push_back(std::string(buf.data(), ret));
+        paths.push_back(std::string(buf.data(), ret) + suffix);
     }
 
     return paths;
+}
+
+// number of files of a split model according to the file name, only used to spread the progress of decoding
+static size_t llama_split_count_hint(std::string path) {
+    llama_codec_strip_suffix(path);
+    const size_t pos = path.rfind("-of-");
+    int no = 0;
+    int count = 0;
+    if (pos == std::string::npos || pos < 5 || sscanf(path.c_str() + pos - 5, "%5d-of-%5d.gguf", &no, &count) != 2 || count < 1 || count > 4096) {
+        return 1;
+    }
+    return (size_t) count;
 }
 
 namespace GGUFMeta {
@@ -542,7 +561,10 @@ llama_model_loader::llama_model_loader(
         bool no_alloc,
         bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        bool metadata_only,
+        llama_progress_callback progress_callback,
+        void * progress_callback_user_data)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
@@ -559,16 +581,24 @@ llama_model_loader::llama_model_loader(
 
     this->use_mmap      = load_mode == LLAMA_LOAD_MODE_MMAP || load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK || load_mode == LLAMA_LOAD_MODE_AUTO;
     this->use_direct_io = load_mode == LLAMA_LOAD_MODE_DIRECT_IO;
+    this->metadata_only = metadata_only;
+
+    load_progress.callback  = progress_callback;
+    load_progress.user_data = progress_callback_user_data;
 
     if (!fname.empty()) {
         // Load the main GGUF
-        struct ggml_context * ctx = NULL;
-        struct gguf_init_params params = {
-            /*.no_alloc = */ true,
-            /*.ctx      = */ &ctx,
-        };
+        llama_model_source_params source_params;
+        source_params.metadata_only = metadata_only;
+        source_params.use_mmap      = use_mmap;
+        source_params.use_direct_io = use_direct_io;
+        source_params.progress      = &load_progress;
+        source_params.count         = splits.empty() ? llama_split_count_hint(fname) : splits.size();
 
-        metadata_ptr.reset(gguf_init_from_file(fname.c_str(), params));
+        llama_model_source source = llama_open_model_source(fname, source_params);
+        struct ggml_context * ctx = source.ctx;
+
+        metadata_ptr = std::move(source.meta);
         metadata = metadata_ptr.get();
         if (metadata == nullptr) {
             throw std::runtime_error(format("%s: failed to load model from %s", __func__, fname.c_str()));
@@ -577,7 +607,7 @@ llama_model_loader::llama_model_loader(
         get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
-        files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
+        files.emplace_back(std::move(source.file));
         contexts.emplace_back(ctx);
 
         // Save tensors data offset of the main file.
@@ -624,11 +654,11 @@ llama_model_loader::llama_model_loader(
             for (idx = 1; idx < n_split; idx++) {
                 const char * fname_split = splits[idx].c_str();
 
-                struct gguf_init_params split_params = {
-                    /*.no_alloc = */ true,
-                    /*.ctx      = */ &ctx,
-                };
-                gguf_context_ptr ctx_gguf { gguf_init_from_file(fname_split, split_params) };
+                source_params.index = idx;
+                source_params.count = n_split;
+                llama_model_source split_source = llama_open_model_source(fname_split, source_params);
+                ctx = split_source.ctx;
+                gguf_context_ptr ctx_gguf = std::move(split_source.meta);
                 if (!ctx_gguf) {
                     throw std::runtime_error(format("%s: failed to load GGUF split from %s", __func__, fname_split));
                 }
@@ -645,7 +675,7 @@ llama_model_loader::llama_model_loader(
                     }
                 }
 
-                files.emplace_back(new llama_file(fname_split, "rb", use_direct_io));
+                files.emplace_back(std::move(split_source.file));
                 contexts.emplace_back(ctx);
 
                 // Save tensors data offset info of the shard.
@@ -1416,6 +1446,13 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
         for (uint32_t idx = 0; idx < files.size(); idx++) {
             const auto & file = files[idx];
 
+            // a source opened for metadata only has nothing to map
+            if (!file->mappable()) {
+                mmaps_used.emplace_back(0, 0);
+                mappings.emplace_back(nullptr);
+                continue;
+            }
+
             bool is_numa = false;
 
             auto * dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
@@ -1553,9 +1590,7 @@ const void * llama_model_loader::load_data_range(const llama_tensor_weight & w, 
 bool llama_model_loader::load_all_data(
         struct ggml_context * ctx,
         std::vector<ggml_backend_buffer_t> & bufs,
-        llama_mlocks * lmlocks,
-        llama_progress_callback progress_callback,
-        void * progress_callback_user_data) {
+        llama_mlocks * lmlocks) {
     if (files.empty()) {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
             set_tensor_data(t, set_tensor_data_ud);
@@ -1688,10 +1723,8 @@ bool llama_model_loader::load_all_data(
             continue;
         }
 
-        if (progress_callback) {
-            if (!progress_callback((float) size_done / size_data, progress_callback_user_data)) {
-                return false;
-            }
+        if (!load_progress.report_load((float) size_done / size_data)) {
+            return false;
         }
 
         size_t n_size = ggml_nbytes(cur);
@@ -1851,11 +1884,9 @@ bool llama_model_loader::load_all_data(
                 }
             }
         }
-        if (progress_callback) {
-            // Even though the model is done loading, we still honor
-            // cancellation since we need to free allocations.
-            return progress_callback(1.0f, progress_callback_user_data);
-        }
+        // Even though the model is done loading, we still honor
+        // cancellation since we need to free allocations.
+        return load_progress.report_load(1.0f);
     }
 
     return true;

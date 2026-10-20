@@ -34,9 +34,12 @@ set(LLAMA_CORE_SOURCES
     llama-memory-hybrid-idx.cpp
     llama-memory-recurrent.cpp
     llama-backing-store.cpp
+    llama-codec.cpp
+    llama-codec-xz.cpp
     llama-mmap.cpp
     llama-model-loader.cpp
     llama-model-saver.cpp
+    llama-model-source.cpp
     llama-model.cpp
     llama-quant.cpp
     llama-sampler.cpp
@@ -71,6 +74,33 @@ target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
+
+# optional codecs for compressed models. Without one, a file in that format is refused with an explicit error
+# <option> is AUTO (use the library if found), ON (require it) or OFF, the result is <option>_ENABLED
+function(llama_optional_codec option package found_var target define label)
+    set(enabled OFF)
+    string(TOUPPER "${${option}}" mode)
+    if (NOT mode MATCHES "^(AUTO|ON|OFF)$")
+        message(FATAL_ERROR "${option} must be AUTO, ON or OFF, got '${${option}}'")
+    endif()
+    if (NOT mode STREQUAL "OFF")
+        if (mode STREQUAL "ON")
+            find_package(${package} REQUIRED)
+        else()
+            find_package(${package})
+        endif()
+        if (${found_var})
+            set(enabled ON)
+            target_link_libraries(llama PRIVATE ${target})
+            target_compile_definitions(llama PRIVATE ${define})
+        endif()
+    endif()
+    message(STATUS "llama: ${label} support for compressed models: ${enabled}")
+    set(${option}_ENABLED ${enabled} PARENT_SCOPE)
+endfunction()
+
+llama_optional_codec(LLAMA_LZMA LibLZMA LIBLZMA_FOUND LibLZMA::LibLZMA LLAMA_USE_LZMA xz)
+set(LLAMA_LZMA_ENABLED ${LLAMA_LZMA_ENABLED} PARENT_SCOPE)
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)

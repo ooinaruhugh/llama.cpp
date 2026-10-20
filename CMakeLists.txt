@@ -143,6 +143,8 @@ option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 
 # 3rd party libs
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
+set(LLAMA_LZMA "AUTO" CACHE STRING "llama: xz support for compressed models (AUTO: use liblzma if found, ON: require it, OFF: disable)")
+set_property(CACHE LLAMA_LZMA PROPERTY STRINGS AUTO ON OFF)
 option(LLAMA_SUBPROCESS "llama-common: use subprocess, required by server tools and server router mode" ${LLAMA_SUBPROCESS_DEFAULT})
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
@@ -310,6 +312,12 @@ write_basic_package_version_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/llama-config-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
+
+set(LLAMA_PC_LIBS_PRIVATE "")
+if (LLAMA_LZMA_ENABLED)
+    string(APPEND LLAMA_PC_LIBS_PRIVATE " -llzma")
+endif()
+string(STRIP "${LLAMA_PC_LIBS_PRIVATE}" LLAMA_PC_LIBS_PRIVATE)
 
 configure_file(cmake/llama.pc.in
         "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"

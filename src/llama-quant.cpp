@@ -987,10 +987,14 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // mmap consistently increases speed on Linux, and also increases speed on Windows with
     // hot cache. It may cause a slowdown on macOS, possibly related to free memory.
 #if defined(__linux__) || defined(_WIN32)
-    constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_MMAP;
+    llama_load_mode load_mode = LLAMA_LOAD_MODE_MMAP;
 #else
-    constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_NONE;
+    llama_load_mode load_mode = LLAMA_LOAD_MODE_NONE;
 #endif
+    // a compressed model is only available through its mapping
+    if (llama_model_source_is_compressed(fname_inp)) {
+        load_mode = LLAMA_LOAD_MODE_MMAP;
+    }
 
     const llama_model_kv_override * kv_overrides = params->kv_overrides;
     std::vector<std::string> splits = {};

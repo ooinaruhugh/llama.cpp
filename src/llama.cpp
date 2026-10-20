@@ -317,7 +317,8 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
         const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model_params & params) {
     try {
         llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.load_mode,
-            params.check_tensors, params.no_alloc, params.load_mtp, params.kv_overrides, params.tensor_buft_overrides);
+            params.check_tensors, params.no_alloc, params.load_mtp, params.kv_overrides, params.tensor_buft_overrides,
+            params.no_alloc || params.vocab_only, params.progress_callback, params.progress_callback_user_data);
 
         ml.lazy.mode = params.lazy_mode;
 
@@ -371,6 +372,8 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
         }
 
         return {0, model_ptr.release()};
+    } catch (const llama_load_cancelled &) {
+        return {-2, nullptr};
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
         return {-1, nullptr};

@@ -6,6 +6,7 @@
 #include "llama-arch.h"
 #include "llama-hparams.h"
 #include "llama-mmap.h"
+#include "llama-model-source.h"
 
 #include "ggml-cpp.h"
 
@@ -78,6 +79,8 @@ struct llama_model_loader {
 
     bool use_mmap = false;
     bool use_direct_io = false;
+    bool metadata_only = false;
+    llama_load_progress load_progress;
     bool check_tensors;
     bool no_alloc;
     bool load_mtp;
@@ -181,7 +184,10 @@ struct llama_model_loader {
         bool no_alloc,
         bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        bool metadata_only = false, // the tensor data is never read (no_alloc, vocab_only), so a compressed file is not materialised
+        llama_progress_callback progress_callback = nullptr,
+        void * progress_callback_user_data = nullptr);
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
@@ -262,9 +268,7 @@ struct llama_model_loader {
     bool load_all_data(
             struct ggml_context * ctx,
             std::vector<ggml_backend_buffer_t> & bufs,
-            llama_mlocks * lmlocks,
-            llama_progress_callback progress_callback,
-            void * progress_callback_user_data);
+            llama_mlocks * lmlocks);
 
     std::string ftype_name() const;
 
