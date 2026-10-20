@@ -1202,12 +1202,7 @@ common_decision_type common_get_decision_type(const struct llama_model * model) 
 common_gguf_info common_get_gguf_info(const std::string & fname) {
     common_gguf_info info;
 
-    struct gguf_init_params gguf_params = {
-        /* .no_alloc = */ true,
-        /* .ctx      = */ nullptr,
-    };
-
-    gguf_context_ptr gguf_ctx(gguf_init_from_file(fname.c_str(), gguf_params));
+    gguf_context_ptr gguf_ctx(llama_gguf_open_metadata(fname.c_str()));
     if (!gguf_ctx) {
         return info; // missing or unreadable file
     }

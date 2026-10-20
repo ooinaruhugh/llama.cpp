@@ -2396,12 +2396,7 @@ common_speculative_type common_speculative_type_from_name(const std::string & na
 }
 
 std::vector<common_speculative_type> common_speculative_types_from_gguf(const std::string & path) {
-    struct gguf_init_params gguf_params = {
-        /* .no_alloc = */ true,
-        /* .ctx      = */ nullptr,
-    };
-
-    gguf_context_ptr gguf_ctx(gguf_init_from_file(path.c_str(), gguf_params));
+    gguf_context_ptr gguf_ctx(llama_gguf_open_metadata(path.c_str()));
     if (!gguf_ctx) {
         return {};
     }

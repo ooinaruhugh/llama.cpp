@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-model-source.h"
 
 #include <map>
 #include <cassert>
@@ -428,6 +429,11 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
 
 llama_adapter_lora * llama_adapter_lora_init(llama_model * model, const char * path_lora) {
     LLAMA_LOG_INFO("%s: loading lora adapter from '%s' ...\n", __func__, path_lora);
+
+    if (llama_model_source_is_compressed(path_lora)) {
+        LLAMA_LOG_ERROR("%s: '%s' is compressed, which is supported for models but not for lora adapters\n", __func__, path_lora);
+        return nullptr;
+    }
 
     FILE * file = ggml_fopen(path_lora, "rb");
     if (!file) {

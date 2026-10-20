@@ -1257,8 +1257,7 @@ static nextn_model_info nextn_read_model_info(const std::string & model_path, in
     nextn_model_info info;
     info.own_lm_head.assign(n_heads, false);
 
-    struct gguf_init_params gguf_params = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
-    struct gguf_context * ctx_gguf = gguf_init_from_file(model_path.c_str(), gguf_params);
+    struct gguf_context * ctx_gguf = llama_gguf_open_metadata(model_path.c_str());
     if (!ctx_gguf) {
         LOG_WRN("%s: cannot read '%s'\n", __func__, model_path.c_str());
         return info;
@@ -1301,8 +1300,7 @@ struct model_file_shape {
 static model_file_shape model_read_file_shape(const std::string & model_path) {
     model_file_shape shape;
 
-    struct gguf_init_params gguf_params = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
-    struct gguf_context * ctx_gguf = gguf_init_from_file(model_path.c_str(), gguf_params);
+    struct gguf_context * ctx_gguf = llama_gguf_open_metadata(model_path.c_str());
     if (!ctx_gguf) { return shape; }
     shape.valid = true;
 

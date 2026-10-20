@@ -3,6 +3,7 @@
 
 #include "../src/llama-backing-store.h"
 #include "../src/llama-codec.h"
+#include "../src/llama-ext.h"
 #include "../src/llama-mmap.h"
 #include "../src/llama-model-source.h"
 
@@ -187,6 +188,13 @@ static const std::vector<fixture_codec> & fixture_codecs() {
     return codecs;
 }
 
+// the first half of a file, which is an incomplete stream
+static std::vector<uint8_t> good_prefix(const std::string & path) {
+    std::vector<uint8_t> data = read_file(path);
+    data.resize(data.size() / 2);
+    return data;
+}
+
 static bool same_kv(const gguf_context * a, const gguf_context * b) {
     if (!a || !b || gguf_get_n_kv(a) != gguf_get_n_kv(b) || gguf_get_n_tensors(a) != gguf_get_n_tensors(b)) {
         return false;
@@ -241,6 +249,16 @@ static void test_compressed(const fixture_codec & c, const std::string & dir, co
         CHECK(src.file && !src.file->readable() && !src.file->mappable());
         CHECK(src.file->size() == orig.size());
         CHECK(throws([&] { llama_mmap m(src.file.get(), 0); }));
+    }
+
+    // the metadata-only open used by the callers outside the model loader
+    {
+        gguf_context_ptr a(llama_gguf_open_metadata(plain_path.c_str()));
+        gguf_context_ptr b(llama_gguf_open_metadata(xz_path.c_str()));
+        CHECK(a && b && same_kv(a.get(), b.get()));
+        CHECK(llama_gguf_open_metadata("/nonexistent/model.gguf.compressed") == nullptr);
+        write_file(dir + "/short.xz", std::vector<uint8_t>(good_prefix(xz_path)));
+        CHECK(llama_gguf_open_metadata((dir + "/short.xz").c_str()) == nullptr);
     }
 
     // compressed input needs mmap unless only the metadata is wanted

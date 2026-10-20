@@ -10,6 +10,13 @@
 #include <map>
 #include <vector>
 
+struct gguf_context;
+
+// Open the metadata of a GGUF file: the key-value pairs and the tensor infos, without the tensor data.
+// Opens a file the way the model loader does, so a compressed GGUF is accepted too (only its header is decoded).
+// Returns NULL if the file cannot be read or is not a GGUF, free the result with gguf_free().
+LLAMA_API struct gguf_context * llama_gguf_open_metadata(const char * path);
+
 // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
 LLAMA_API struct ggml_cgraph * llama_graph_reserve(
         struct llama_context * ctx,

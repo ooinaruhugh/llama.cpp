@@ -1,5 +1,7 @@
 #include "llama-model-source.h"
 
+#include "llama-ext.h"
+
 #include "llama-backing-store.h"
 #include "llama-codec.h"
 #include "llama-impl.h"
@@ -144,4 +146,19 @@ llama_model_source llama_open_model_source(const std::string & path, const llama
         throw std::runtime_error(format("failed to load %s: %s", path.c_str(), e.what()));
     }
     return src;
+}
+
+struct gguf_context * llama_gguf_open_metadata(const char * path) {
+    try {
+        llama_model_source_params params;
+        params.metadata_only = true;
+        llama_model_source src = llama_open_model_source(path, params);
+        if (src.ctx) {
+            ggml_free(src.ctx);
+        }
+        return src.meta.release();
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: %s\n", __func__, err.what());
+        return nullptr;
+    }
 }
